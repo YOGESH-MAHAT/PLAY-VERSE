@@ -1,0 +1,172 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>World Cup Tournament Engine</title>
+  <link rel="stylesheet" href="code.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-bg"></div>
+    <div class="header-content">
+      <div class="trophy-icon">🏆</div>
+      <div class="header-text">
+        <h1>WORLD CUP</h1>
+        <span class="subtitle">TOURNAMENT ENGINE · 32 TEAMS · FIFA RULES</span>
+      </div>
+      <div class="header-badge">2026</div>
+    </div>
+  </header>
+
+  <!-- STAGE TABS -->
+  <nav class="stage-nav" id="stageNav">
+    <button class="stage-btn active" data-stage="setup">⚙ SETUP</button>
+    <button class="stage-btn" data-stage="groups" id="btnGroups" disabled>📊 GROUP STAGE</button>
+    <button class="stage-btn" data-stage="knockout" id="btnKnockout" disabled>🔥 KNOCKOUT</button>
+    <button class="stage-btn" data-stage="champion" id="btnChampion" disabled>🏆 CHAMPION</button>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+
+    <!-- ===== SETUP PANEL ===== -->
+    <section class="panel" id="panelSetup">
+      <div class="panel-header">
+        <h2>CONFIGURE YOUR TOURNAMENT</h2>
+        <p>32 teams · 8 groups · FIFA rules</p>
+      </div>
+
+      <div class="setup-grid">
+        <!-- Team list -->
+        <div class="card teams-card">
+          <h3 class="card-title">🌍 TEAMS</h3>
+          <div class="teams-grid" id="teamsGrid"></div>
+          <div class="team-actions">
+            <button class="btn btn-ghost" id="btnRandomTeams">🎲 Random Selection</button>
+            <button class="btn btn-ghost" id="btnResetTeams">↺ Reset to Default</button>
+          </div>
+        </div>
+
+        <!-- Assignment mode -->
+        <div class="card config-card">
+          <h3 class="card-title">⚙ TOURNAMENT SETTINGS</h3>
+          <div class="config-group">
+            <label class="config-label">GROUP ASSIGNMENT</label>
+            <div class="radio-group">
+              <label class="radio-option">
+                <input type="radio" name="groupMode" value="random" checked />
+                <span>🎲 Random Draw</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="groupMode" value="seeded" />
+                <span>🌟 Seeded Draw</span>
+              </label>
+            </div>
+          </div>
+          <div class="config-group">
+            <label class="config-label">MATCH SIMULATION</label>
+            <div class="radio-group">
+              <label class="radio-option">
+                <input type="radio" name="simMode" value="auto" checked />
+                <span>⚡ Auto Simulate</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="simMode" value="step" />
+                <span>👁 Step-by-Step</span>
+              </label>
+            </div>
+          </div>
+          <div class="config-group">
+            <label class="config-label">MATCH RULES</label>
+            <div class="rules-info">
+              <div class="rule-item"><span class="rule-badge win">W</span> Win = 3 pts</div>
+              <div class="rule-item"><span class="rule-badge draw">D</span> Draw = 1 pt</div>
+              <div class="rule-item"><span class="rule-badge loss">L</span> Loss = 0 pts</div>
+            </div>
+          </div>
+          <div class="config-group">
+            <label class="config-label">TIE-BREAK ORDER</label>
+            <ol class="tiebreak-list">
+              <li>Goal Difference (GD)</li>
+              <li>Goals For (GF)</li>
+              <li>Head-to-Head Result</li>
+              <li>Fair Play / Random</li>
+            </ol>
+          </div>
+
+          <button class="btn btn-primary btn-launch" id="btnLaunch">
+            <span>🚀 LAUNCH TOURNAMENT</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== GROUP STAGE PANEL ===== -->
+    <section class="panel hidden" id="panelGroups">
+      <div class="panel-header">
+        <h2>GROUP STAGE</h2>
+        <p>8 Groups · Round Robin · Top 2 qualify</p>
+      </div>
+
+      <div class="matchday-controls" id="matchdayControls">
+        <div class="matchday-info">
+          <span class="md-label">MATCHDAY</span>
+          <span class="md-num" id="matchdayNum">1</span>
+          <span class="md-of">of 3</span>
+        </div>
+        <button class="btn btn-primary" id="btnSimMatchday">▶ SIMULATE MATCHDAY</button>
+        <button class="btn btn-ghost" id="btnAutoAll">⚡ AUTO-COMPLETE GROUPS</button>
+      </div>
+
+      <!-- Groups Grid -->
+      <div class="groups-grid" id="groupsGrid"></div>
+
+      <!-- Match Results -->
+      <div class="results-section" id="matchResults">
+        <h3 class="section-title">MATCH RESULTS</h3>
+        <div class="results-grid" id="resultsGrid"></div>
+      </div>
+
+      <!-- Qualify Button -->
+      <div class="qualify-section hidden" id="qualifySection">
+        <div class="qualify-banner">
+          <h3>✅ GROUP STAGE COMPLETE</h3>
+          <p>16 teams have qualified for the knockout round!</p>
+          <button class="btn btn-primary btn-qualify" id="btnToKnockout">VIEW KNOCKOUT BRACKET →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== KNOCKOUT PANEL ===== -->
+    <section class="panel hidden" id="panelKnockout">
+      <div class="panel-header">
+        <h2>KNOCKOUT STAGE</h2>
+        <p>Round of 16 → Quarterfinals → Semifinals → Final</p>
+      </div>
+
+      <div class="knockout-rounds" id="knockoutRounds"></div>
+
+      <div class="ko-controls" id="koControls">
+        <button class="btn btn-primary" id="btnSimRound">▶ SIMULATE ROUND</button>
+        <button class="btn btn-ghost" id="btnAutoKO">⚡ AUTO-COMPLETE</button>
+      </div>
+    </section>
+
+    <!-- ===== CHAMPION PANEL ===== -->
+    <section class="panel hidden" id="panelChampion">
+      <div class="champion-scene" id="championScene"></div>
+    </section>
+
+  </main>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script src="tournament.js"></script>
+</body>
+</html>
