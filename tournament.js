@@ -1,206 +1,411 @@
-// ============================================================
-//  TOURNAMENT ENGINE — tournament_engine.js
-//  Auto-calculates standings from MATCH_RESULTS
-//  Read-only public display, no editing on frontend
-// ============================================================
-
+/* ================================================================
+   PLAYVERSE eFOOTBALL — tournament_engine.js
+   Auto-calculates standings, draws, brackets. Read-only display.
+   ================================================================ */
 'use strict';
 
-// ─── STANDINGS CALCULATION ──────────────────────────────────
+// ── HELPERS ──────────────────────────────────────────────────────
+const qi  = id => document.getElementById(id);
+const esc = s  => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-function buildStandings() {
-  const table = {};
-  TEAMS.forEach(name => {
-    table[name] = { name, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, GD: 0, PTS: 0 };
-  });
-
-  MATCH_RESULTS.forEach(m => {
-    if (m.hg === null || m.ag === null) return;
-    const h = table[m.home];
-    const a = table[m.away];
-    if (!h || !a) { console.warn('Unknown team:', m.home, m.away); return; }
-    h.P++; a.P++;
-    h.GF += m.hg; h.GA += m.ag; h.GD = h.GF - h.GA;
-    a.GF += m.ag; a.GA += m.hg; a.GD = a.GF - a.GA;
-    if (m.hg > m.ag) { h.W++; h.PTS += 3; a.L++; }
-    else if (m.hg < m.ag) { a.W++; a.PTS += 3; h.L++; }
-    else { h.D++; h.PTS++; a.D++; a.PTS++; }
-  });
-
-  return Object.values(table).sort((a, b) => {
-    if (b.PTS !== a.PTS) return b.PTS - a.PTS;
-    if (b.GD  !== a.GD)  return b.GD  - a.GD;
-    if (b.GF  !== a.GF)  return b.GF  - a.GF;
-    return a.name.localeCompare(b.name);
-  });
+function seededShuffle(arr, seed) {
+  const a = [...arr];
+  let s = seed;
+  for (let i = a.length - 1; i > 0; i--) {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    const j = Math.abs(s) % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
-// ─── RENDER STANDINGS ───────────────────────────────────────
-
-function renderStandings() {
-  const standings = buildStandings();
-  const tbody = document.getElementById('standingsTbody');
-  tbody.innerHTML = '';
-
-  standings.forEach((row, idx) => {
-    const pos = idx + 1;
-    const gdStr = row.GD > 0 ? `+${row.GD}` : `${row.GD}`;
-    const gdClass = row.GD > 0 ? 'pos' : row.GD < 0 ? 'neg' : '';
-    const posClass = pos === 1 ? 'pos-gold' : pos === 2 ? 'pos-silver' : pos === 3 ? 'pos-bronze' : '';
-    const formBadges = getForm(row.name);
-
-    tbody.innerHTML += `
-      <tr class="standings-row ${pos <= 8 ? 'highlight-zone' : ''}">
-        <td class="pos-cell ${posClass}">${pos}</td>
-        <td class="team-name-cell">${escHTML(row.name)}</td>
-        <td>${row.P}</td>
-        <td class="w-col">${row.W}</td>
-        <td class="d-col">${row.D}</td>
-        <td class="l-col">${row.L}</td>
-        <td>${row.GF}</td>
-        <td>${row.GA}</td>
-        <td class="gd-cell ${gdClass}">${row.P > 0 ? gdStr : '—'}</td>
-        <td class="pts-cell">${row.PTS}</td>
-        <td class="form-cell">${formBadges}</td>
-      </tr>`;
+// ── GROUP STANDINGS ENGINE ────────────────────────────────────────
+function groupStandings(groupKey) {
+  const teams = GROUPS[groupKey];
+  const matches = GROUP_MATCHES[groupKey];
+  const tbl = {};
+  teams.forEach(n => { tbl[n] = {name:n,P:0,W:0,D:0,L:0,GF:0,GA:0,GD:0,PTS:0}; });
+  matches.forEach(m => {
+    if (m.s1===null||m.s2===null) return;
+    const a=tbl[m.t1], b=tbl[m.t2];
+    if(!a||!b) return;
+    a.P++; b.P++;
+    a.GF+=m.s1; a.GA+=m.s2; a.GD=a.GF-a.GA;
+    b.GF+=m.s2; b.GA+=m.s1; b.GD=b.GF-b.GA;
+    if(m.s1>m.s2){a.W++;a.PTS+=3;b.L++;}
+    else if(m.s1<m.s2){b.W++;b.PTS+=3;a.L++;}
+    else{a.D++;a.PTS++;b.D++;b.PTS++;}
   });
+  return Object.values(tbl).sort((a,b)=>
+    b.PTS-a.PTS||b.GD-a.GD||b.GF-a.GF||a.name.localeCompare(b.name)
+  );
+}
 
-  // Update summary stats
-  const total = MATCH_RESULTS.filter(m => m.hg !== null).length;
-  const totalPossible = (TEAMS.length * (TEAMS.length - 1)) / 2;
-  document.getElementById('matchesPlayed').textContent = total;
-  document.getElementById('matchesTotal').textContent = totalPossible;
-  document.getElementById('progressPct').textContent = Math.round(100 * total / totalPossible) + '%';
+// ── AUTO DRAW ENGINE ─────────────────────────────────────────────
+function buildDraw() {
+  if (KNOCKOUT.r16 && KNOCKOUT.r16.length > 0) return KNOCKOUT.r16;
+  const winners = [], runners = [];
+  Object.keys(GROUPS).sort().forEach(g => {
+    const st = groupStandings(g);
+    winners.push({team: st[0].name, group: g});
+    runners.push({team: st[1].name, group: g});
+  });
+  const shuffledRunners = seededShuffle(runners, DRAW_SEED);
+  const pairs = [];
+  const usedRunners = [];
+  winners.forEach(w => {
+    const eligible = shuffledRunners.filter(r =>
+      r.group !== w.group && !usedRunners.includes(r.team)
+    );
+    if (eligible.length > 0) {
+      const r = eligible[0];
+      usedRunners.push(r.team);
+      pairs.push({ t1: w.team, t2: r.team, s1: null, s2: null, label: `1${w.group} vs 2${r.group}` });
+    }
+  });
+  return pairs;
+}
 
-  const prog = document.getElementById('progressBar');
-  if (prog) prog.style.width = Math.round(100 * total / totalPossible) + '%';
+// ── STATS ────────────────────────────────────────────────────────
+function getTournamentStats() {
+  let played=0, totalGoals=0, total=0;
+  Object.values(GROUP_MATCHES).forEach(arr => {
+    arr.forEach(m => {
+      total++;
+      if(m.s1!==null){played++;totalGoals+=m.s1+m.s2;}
+    });
+  });
+  return {played,total,totalGoals,avgGoals:played?+(totalGoals/played).toFixed(2):0};
 }
 
 function getForm(teamName) {
-  // Get last 5 played results for this team
-  const results = MATCH_RESULTS.filter(m =>
-    m.hg !== null && (m.home === teamName || m.away === teamName)
-  ).slice(-5);
-
-  return results.map(m => {
-    const isHome = m.home === teamName;
-    const scored = isHome ? m.hg : m.ag;
-    const conceded = isHome ? m.ag : m.hg;
-    let cls, letter;
-    if (scored > conceded) { cls = 'w'; letter = 'W'; }
-    else if (scored < conceded) { cls = 'l'; letter = 'L'; }
-    else { cls = 'd'; letter = 'D'; }
-    return `<span class="form-badge ${cls}">${letter}</span>`;
-  }).join('');
+  const results = [];
+  Object.values(GROUP_MATCHES).forEach(arr => arr.forEach(m => {
+    if(m.s1===null||(m.t1!==teamName&&m.t2!==teamName)) return;
+    const mine=m.t1===teamName?m.s1:m.s2, opp=m.t1===teamName?m.s2:m.s1;
+    results.push(mine>opp?'w':mine<opp?'l':'d');
+  }));
+  return results.slice(-5).map(r=>`<span class="fb ${r}">${r.toUpperCase()}</span>`).join('');
 }
 
-function escHTML(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// ── RENDER: DASHBOARD ────────────────────────────────────────────
+function renderDashboard() {
+  const stats = getTournamentStats();
+  const pct = stats.total ? Math.round(100*stats.played/stats.total) : 0;
+
+  qi('dashPlayed').textContent  = stats.played;
+  qi('dashTotal').textContent   = stats.total;
+  qi('dashGoals').textContent   = stats.totalGoals;
+  qi('dashAvg').textContent     = stats.avgGoals;
+  qi('dashPct').textContent     = pct+'%';
+  qi('dashBar').style.width     = pct+'%';
+
+  // Team is the scorer identity (1 player per team)
+  const topSc = [...SCORERS].sort((a,b)=>b.goals-a.goals||b.assists-a.assists);
+  const dsList = qi('dashScorers');
+  dsList.innerHTML = '';
+  topSc.slice(0,5).forEach((s,i) => {
+    dsList.innerHTML += `
+      <div class="ds-row">
+        <span class="ds-rank">${i+1}</span>
+        <div class="ds-info">
+          <div class="ds-player">${esc(s.team)}</div>
+          <div class="ds-team">${esc(s.player)} · Top Scorer</div>
+        </div>
+        <div class="ds-stats">
+          <span class="ds-goals">${s.goals} <small>G</small></span>
+          <span class="ds-assists">${s.assists} <small>A</small></span>
+        </div>
+      </div>`;
+  });
+
+  const allMatches = [];
+  Object.entries(GROUP_MATCHES).forEach(([g, arr]) =>
+    arr.forEach(m => allMatches.push({...m, group: g}))
+  );
+  const recent = allMatches.filter(m=>m.s1!==null).slice(-4).reverse();
+  const upcoming = allMatches.filter(m=>m.s1===null).slice(0,4);
+
+  const rEl = qi('dashRecent');
+  rEl.innerHTML = '';
+  if(!recent.length) { rEl.innerHTML='<div class="empty-s">No results yet</div>'; }
+  recent.forEach(m => {
+    const hw=m.s1>m.s2, aw=m.s2>m.s1;
+    rEl.innerHTML += `
+      <div class="dm-card played">
+        <span class="dm-grp">GROUP ${m.group}</span>
+        <div class="dm-body">
+          <span class="dm-team ${hw?'dw':aw?'dl':''}">${esc(m.t1)}</span>
+          <span class="dm-score">${m.s1} – ${m.s2}</span>
+          <span class="dm-team right ${aw?'dw':hw?'dl':''}">${esc(m.t2)}</span>
+        </div>
+      </div>`;
+  });
+
+  const uEl = qi('dashUpcoming');
+  uEl.innerHTML = '';
+  if(!upcoming.length) { uEl.innerHTML='<div class="empty-s">All matches played!</div>'; }
+  upcoming.forEach(m => {
+    uEl.innerHTML += `
+      <div class="dm-card">
+        <span class="dm-grp">GROUP ${m.group}</span>
+        <div class="dm-body">
+          <span class="dm-team">${esc(m.t1)}</span>
+          <span class="dm-score upc-dot">VS</span>
+          <span class="dm-team right">${esc(m.t2)}</span>
+        </div>
+      </div>`;
+  });
 }
 
-// ─── RENDER FIXTURES ────────────────────────────────────────
+// ── RENDER: GROUPS ───────────────────────────────────────────────
+function renderGroups() {
+  const wrap = qi('groupsWrap');
+  wrap.innerHTML = '';
+  Object.keys(GROUPS).sort().forEach(g => {
+    const st = groupStandings(g);
+    const matches = GROUP_MATCHES[g];
+    const playedM = matches.filter(m=>m.s1!==null).length;
+    const pct = Math.round(100*playedM/matches.length);
 
-function renderFixtures(filter) {
-  const grid = document.getElementById('fixturesGrid');
-  grid.innerHTML = '';
+    let tableRows = st.map((r,i) => {
+      const gd = r.GD>=0?'+'+r.GD:r.GD;
+      const posC = i===0?'gold':i===1?'silver':i===2?'bronze':'';
+      const qual = i<2?' qz':'';
+      return `
+        <tr class="sr${qual}">
+          <td class="pc ${posC}">${i+1}</td>
+          <td class="tnc">${esc(r.name)}</td>
+          <td>${r.P}</td><td class="wc">${r.W}</td><td class="dc">${r.D}</td><td class="lc">${r.L}</td>
+          <td>${r.GF}</td><td>${r.GA}</td>
+          <td class="gdc ${r.GD>0?'pos':r.GD<0?'neg':''}">${r.P>0?gd:'—'}</td>
+          <td class="ptsc">${r.PTS}</td>
+          <td class="fmc">${getForm(r.name)}</td>
+        </tr>`;
+    }).join('');
 
-  // Group matches by round-like groupings (every 16 matches = 1 "matchday")
-  let matches = [...MATCH_RESULTS];
+    let matchCards = matches.map(m => {
+      const played=m.s1!==null, hw=played&&m.s1>m.s2, aw=played&&m.s2>m.s1;
+      return `
+        <div class="gm-row ${played?'played':''}">
+          <span class="gm-team ${hw?'gw':aw?'gl':''}">${esc(m.t1)}</span>
+          <span class="gm-sc ${played?'has':''}">${played?`${m.s1}–${m.s2}`:'vs'}</span>
+          <span class="gm-team right ${aw?'gw':hw?'gl':''}">${esc(m.t2)}</span>
+        </div>`;
+    }).join('');
 
-  if (filter === 'played') matches = matches.filter(m => m.hg !== null);
-  else if (filter === 'upcoming') matches = matches.filter(m => m.hg === null);
+    wrap.innerHTML += `
+      <div class="group-card">
+        <div class="group-hdr">
+          <div class="group-letter">GROUP ${g}</div>
+          <div class="group-prog">
+            <div class="gp-track"><div class="gp-fill" style="width:${pct}%"></div></div>
+            <span class="gp-txt">${playedM}/${matches.length}</span>
+          </div>
+        </div>
+        <table class="stbl">
+          <thead><tr>
+            <th>#</th><th class="thteam">TEAM</th>
+            <th>P</th><th>W</th><th>D</th><th>L</th>
+            <th>GF</th><th>GA</th><th>GD</th><th>PTS</th><th class="thform">FORM</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <div class="group-matches">${matchCards}</div>
+      </div>`;
+  });
+}
 
-  if (matches.length === 0) {
-    grid.innerHTML = `<div class="empty-state">No matches to display.</div>`;
-    return;
+// ── RENDER: KNOCKOUT (horizontal bracket skeleton) ────────────────
+function renderKnockout() {
+  const draw = buildDraw();
+  const wrap = qi('knockoutWrap');
+  wrap.innerHTML = '';
+
+  const r16 = draw.length ? draw : Array(8).fill(null).map(()=>({t1:null,t2:null,s1:null,s2:null}));
+  const qf  = KNOCKOUT.qf.length  ? KNOCKOUT.qf  : Array(4).fill(null).map(()=>({t1:null,t2:null,s1:null,s2:null}));
+  const sf  = KNOCKOUT.sf.length  ? KNOCKOUT.sf  : Array(2).fill(null).map(()=>({t1:null,t2:null,s1:null,s2:null}));
+  const fin = KNOCKOUT.final.length? KNOCKOUT.final: [{t1:null,t2:null,s1:null,s2:null}];
+
+  function teamSlot(name, score, isWinner, isLoser) {
+    const cls = isWinner ? 'bkt-team winner' : isLoser ? 'bkt-team loser' : 'bkt-team';
+    const sClass = isWinner ? 'bkt-score win' : 'bkt-score';
+    const scoreDisplay = score !== null && score !== undefined ? score : '';
+    return `<div class="${cls}">
+      <span class="bkt-name">${esc(name || 'TBD')}</span>
+      <span class="${sClass}">${scoreDisplay}</span>
+    </div>`;
   }
 
-  // Build round index
-  const roundSize = TEAMS.length / 2; // 16 matches per round
-  matches.forEach((m, absIdx) => {
-    const origIdx = MATCH_RESULTS.indexOf(m);
-    const round = Math.floor(origIdx / roundSize) + 1;
-    const played = m.hg !== null;
-    const hWin = played && m.hg > m.ag;
-    const aWin = played && m.ag > m.hg;
-    const draw = played && m.hg === m.ag;
+  function matchCard(m) {
+    if (!m) m = {t1:null,t2:null,s1:null,s2:null};
+    const played = m.s1 !== null && m.s2 !== null;
+    const hw = played && m.s1 > m.s2;
+    const aw = played && m.s2 > m.s1;
+    return `<div class="bkt-match">
+      ${teamSlot(m.t1, m.s1, hw, aw)}
+      ${teamSlot(m.t2, m.s2, aw, hw)}
+    </div>`;
+  }
 
-    const card = document.createElement('div');
-    card.className = `fixture-card ${played ? 'played' : 'upcoming'}`;
-    card.innerHTML = `
-      <div class="fixture-round">Round ${round}</div>
-      <div class="fixture-body">
-        <div class="fx-team ${hWin ? 'winner' : aWin ? 'loser' : ''}">
-          <span class="fx-name">${escHTML(m.home)}</span>
+  const finalMatch = fin[0];
+  let champion = null;
+  if (finalMatch && finalMatch.s1 !== null && finalMatch.s2 !== null) {
+    champion = finalMatch.s1 > finalMatch.s2 ? finalMatch.t1
+             : finalMatch.s2 > finalMatch.s1 ? finalMatch.t2 : null;
+  }
+
+  wrap.innerHTML = `
+    <div class="bkt-bracket">
+
+      <!-- LEFT SIDE -->
+      <div class="bkt-side bkt-left">
+        <div class="bkt-col bkt-r16">
+          <div class="bkt-col-label">ROUND OF 16</div>
+          <div class="bkt-matches bkt-top">
+            ${matchCard(r16[0])}
+            ${matchCard(r16[1])}
+          </div>
+          <div class="bkt-matches bkt-bot">
+            ${matchCard(r16[2])}
+            ${matchCard(r16[3])}
+          </div>
         </div>
-        <div class="fx-score ${played ? 'has-score' : ''}">
-          ${played
-            ? `<span class="score-num ${hWin ? 'score-win' : ''}">${m.hg}</span>
-               <span class="score-sep">—</span>
-               <span class="score-num ${aWin ? 'score-win' : ''}">${m.ag}</span>`
-            : `<span class="vs-text">VS</span>`
-          }
+        <div class="bkt-col bkt-qf">
+          <div class="bkt-col-label">QUARTER-FINALS</div>
+          <div class="bkt-matches bkt-top">${matchCard(qf[0])}</div>
+          <div class="bkt-matches bkt-bot">${matchCard(qf[1])}</div>
         </div>
-        <div class="fx-team right ${aWin ? 'winner' : hWin ? 'loser' : ''}">
-          <span class="fx-name">${escHTML(m.away)}</span>
+        <div class="bkt-col bkt-sf">
+          <div class="bkt-col-label">SEMI-FINALS</div>
+          <div class="bkt-matches bkt-center">${matchCard(sf[0])}</div>
         </div>
       </div>
-      ${played ? `<div class="fixture-status">${draw ? 'DRAW' : (hWin ? escHTML(m.home) : escHTML(m.away)) + ' WIN'}</div>` : '<div class="fixture-status upcoming-tag">UPCOMING</div>'}
-    `;
-    grid.appendChild(card);
+
+      <!-- FINAL -->
+      <div class="bkt-final-col">
+        <div class="bkt-final-label">FINAL</div>
+        <div class="bkt-final-match">${matchCard(finalMatch)}</div>
+        <div class="bkt-champion">
+          <div class="bkt-champ-label">CHAMPION</div>
+          <div class="bkt-trophy">🏆</div>
+          <div class="bkt-champ-name">${champion ? esc(champion) : '?'}</div>
+        </div>
+      </div>
+
+      <!-- RIGHT SIDE (mirror) -->
+      <div class="bkt-side bkt-right">
+        <div class="bkt-col bkt-sf">
+          <div class="bkt-col-label">SEMI-FINALS</div>
+          <div class="bkt-matches bkt-center">${matchCard(sf[1])}</div>
+        </div>
+        <div class="bkt-col bkt-qf">
+          <div class="bkt-col-label">QUARTER-FINALS</div>
+          <div class="bkt-matches bkt-top">${matchCard(qf[2])}</div>
+          <div class="bkt-matches bkt-bot">${matchCard(qf[3])}</div>
+        </div>
+        <div class="bkt-col bkt-r16">
+          <div class="bkt-col-label">ROUND OF 16</div>
+          <div class="bkt-matches bkt-top">
+            ${matchCard(r16[4])}
+            ${matchCard(r16[5])}
+          </div>
+          <div class="bkt-matches bkt-bot">
+            ${matchCard(r16[6])}
+            ${matchCard(r16[7])}
+          </div>
+        </div>
+      </div>
+
+    </div>`;
+}
+
+// ── RENDER: SCORERS ──────────────────────────────────────────────
+// 1 player per team → team name is the scorer identity
+function renderScorers() {
+  const sorted = [...SCORERS].sort((a,b)=>b.goals-a.goals||b.assists-a.assists);
+  const wrap = qi('scorersWrap');
+  wrap.innerHTML = '';
+  sorted.forEach((s,i) => {
+    const pos = i+1;
+    const medal = pos===1?'🥇':pos===2?'🥈':pos===3?'🥉':'';
+    const maxG  = sorted[0].goals||1;
+    const barW  = Math.round(100*s.goals/maxG);
+    wrap.innerHTML += `
+      <div class="sc-row ${pos<=3?'sc-top':''}">
+        <div class="sc-pos ${pos===1?'gold':pos===2?'silver':pos===3?'bronze':''}">${pos<=3?medal:pos}</div>
+        <div class="sc-info">
+          <div class="sc-name">${esc(s.team)}</div>
+          <div class="sc-team">${esc(s.player)} · Top Scorer</div>
+        </div>
+        <div class="sc-bar-wrap">
+          <div class="sc-bar"><div class="sc-fill" style="width:${barW}%"></div></div>
+        </div>
+        <div class="sc-nums">
+          <span class="sc-g">${s.goals}<small>G</small></span>
+          <span class="sc-a">${s.assists}<small>A</small></span>
+        </div>
+      </div>`;
   });
 }
 
-// ─── FILTER BUTTONS ─────────────────────────────────────────
-
-let currentFilter = 'all';
-
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentFilter = btn.dataset.filter;
-    renderFixtures(currentFilter);
-  });
-});
-
-// ─── STANDINGS SEARCH ───────────────────────────────────────
-
-const searchInput = document.getElementById('teamSearch');
-if (searchInput) {
-  searchInput.addEventListener('input', () => {
-    const q = searchInput.value.toLowerCase();
-    document.querySelectorAll('.standings-row').forEach(row => {
-      const name = row.querySelector('.team-name-cell')?.textContent.toLowerCase() || '';
-      row.style.display = name.includes(q) ? '' : 'none';
+// ── RENDER: TEAMS ────────────────────────────────────────────────
+function renderTeams() {
+  const wrap = qi('teamsWrap');
+  wrap.innerHTML = '';
+  let num = 1;
+  Object.keys(GROUPS).sort().forEach(g => {
+    GROUPS[g].forEach(name => {
+      const st = groupStandings(g);
+      const teamSt = st.find(r=>r.name===name)||{P:0,W:0,D:0,L:0,GF:0,GA:0,PTS:0};
+      wrap.innerHTML += `
+        <div class="tchip">
+          <span class="tnum">${num++}</span>
+          <div class="tinfo">
+            <span class="tname">${esc(name)}</span>
+            <span class="tgrp">Group ${g}</span>
+          </div>
+          <div class="tstats">
+            <span class="tp">${teamSt.PTS} <small>PTS</small></span>
+            <span class="tgf">${teamSt.GF} <small>GF</small></span>
+          </div>
+        </div>`;
     });
   });
 }
 
-// ─── TAB NAVIGATION ─────────────────────────────────────────
-
+// ── TAB NAVIGATION ───────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const target = btn.dataset.tab;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById(target).classList.add('active');
+    qi(btn.dataset.tab).classList.add('active');
   });
 });
 
-// ─── INIT ───────────────────────────────────────────────────
+// ── AUTO-REFRESH ─────────────────────────────────────────────────
+let refreshInterval = null;
+function startAutoRefresh() {
+  renderAll();
+  refreshInterval = setInterval(renderAll, 30000);
+}
+function renderAll() {
+  renderDashboard();
+  renderGroups();
+  renderKnockout();
+  renderScorers();
+  renderTeams();
+  updateHeader();
+  updateLastRefresh();
+}
+function updateHeader() {
+  const el = qi('tStatus'); if(el) el.textContent = TOURNAMENT.status;
+  const s  = qi('tSeason'); if(s) s.textContent  = TOURNAMENT.season;
+}
+function updateLastRefresh() {
+  const el = qi('lastRefresh');
+  if(el) el.textContent = new Date().toLocaleTimeString();
+}
 
-document.addEventListener('DOMContentLoaded', () => {
-  // Set tournament meta
-  document.title = TOURNAMENT.name;
-  const el = document.getElementById('tournamentSeason');
-  if (el) el.textContent = TOURNAMENT.season;
-  const st = document.getElementById('tournamentStatus');
-  if (st) st.textContent = TOURNAMENT.status;
-  const fmt = document.getElementById('tournamentFormat');
-  if (fmt) fmt.textContent = `${TOURNAMENT.format} · ${TEAMS.length} Teams`;
-
-  renderStandings();
-  renderFixtures('all');
-});
+document.addEventListener('DOMContentLoaded', startAutoRefresh);
